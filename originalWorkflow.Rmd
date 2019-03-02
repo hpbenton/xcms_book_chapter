@@ -1,0 +1,56 @@
+---
+title: "Original Workflow"
+output: html_notebook
+---
+
+
+
+```{r}
+require(xcms)
+
+rtDev <- 40
+mzDev <- 25
+
+xs<-xcmsSet(method="centWave", peakwidth=c(10,120))
+xs<-retcor(method="obiwarp", plottype="d", profstep=0.1)
+gxs<-group(xs, bw=20, mzwid=0.01)
+fill<-fillPeaks(gxs, nSlaves=4)
+
+rtrange<-cbind(rtmin=var[,"rt"]-rtDev, rtmax=var[,"rt"]+rtDev) 
+mzRange<-t(sapply(var[,"mz"], function(x, mzDev){
+    range(xcms:::ppmDev(x, mzDev))
+}, mzDev))
+colnames(mzRange)<-c("mzmin", "mzmax")
+
+eics<-getEIC(fill, rtrange=rtrange, mzrange=mzRange)
+dir.create("eic")
+
+colVec<-as.factor(fac)
+opal <- palette()
+opal<-gsub("yellow", "lightgreen", opal)
+levels(colVec) <- opal
+pb <- txtProgressBar(0, nrow(eics@mzrange))
+
+for(i in 1:nrow(eics@mzrange)){
+    ## i == number of eics
+    png(file=paste("eic/EICS-",i,".png", sep=""))
+    for(j in 1:length(eics@eic)){
+        ## j == number of files
+        if(j == 1){
+            plot(eics@eic[[j]][[i]], type="l", col=colVec[j], ylab="Intensity", xlab="RT (sec)", 
+                main=paste("EIC for m/z:", format(eics@mzrange[i,"mzmin"]),"-", format(eics@mzrange[i,"mzmax"]), sep=""),
+                ylim=c(0, var[i,"maxint"]))
+        }else if(j == length(eics@eic)){
+            lines(eics@eic[[j]][[i]], col=colVec[j])
+            legend("topleft", legend=levels(as.factor(fac)), pch=16, col=levels(colVec))
+        }else {
+            lines(eics@eic[[j]][[i]], col=colVec[j])
+        }
+    }
+    setTxtProgressBar(pb, i)
+    dev.off()
+}
+
+```
+
+

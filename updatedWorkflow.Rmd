@@ -1,0 +1,140 @@
+---
+title: "Updated XCMS workflow "
+output: html_notebook
+---
+
+The following code has been tested and run. Some extracts of code have been borrowed from the XCMS help documents and from Xiuxia Du's coding session at the UAB short course 2018 - https://www.uab.edu/proteomics/metabolomics/workshop/2018/day4/use_XCMS3.R 
+This is the updated workflow for xcms using the MSnBase objects. This workflow needs a little more starting code and familiarity with the R commands and general programming. 
+
+```{r}
+require(RColorBrewer) || stop("Cannot load RcolorBrewer")
+require(xcms) || stop("Cannot load package xcms please make sure it's installed")
+require(openxlsx) || stop("Could not load openxlsx package, please install\n")
+
+file.list<-list.files(pattern="mzML$", full.names = T, recursive = T)
+head(file.list)
+pd <- data.frame(sample_name = sub(pattern = ".mzML", "", basename(file.list), fixed = TRUE),
+                 sample_group = sub("\\./Data/", "", dirname(file.list)), stringsAsFactors = FALSE)
+rd<-readMSData(file.list, pdata=new("NAnnotatedDataFrame", pd), mode="onDisk")
+rd
+```
+
+We have now loaded the data into the new xcms3 object type. You can see the output info from the object by calling the object. You'll also notice that the way the data is read is 'onDisk' as opposed to 'inMemory'. 'onDisk' allows xcms to call up chunks of data at a time rather than the whole file loaded into memory. 
+
+Next we'll load up some parameters for peak detection using the centWave peak detector algorithm. This setup will run on all CPU cores of system. 
+
+
+```{r}
+iso.cfp<-CentWavePredIsoParam(peakwidth=c(2,30), prefilter=c(3,200), snthresh=3, verboseColumns=T)
+# cfp<-CentWaveParam(peakwidth=peakwidth, ppm=ppm, prefilter=prefilter, snthresh=snthresh)
+res<-findChromPeaks(rd, param=iso.cfp)
+head(chromPeaks(res))
+```
+
+Now we have a new object that has a new object called 'res' that is an XCMSnExp object type. Before the 'rd' object was a MSnBase object 'OnDiskMSnExp' type is is more for the raw data than the processed data of XCMS.
+
+At this point we just have a peak list, a location of where each peak is located in each file. To get a group of peaks that are in the same m/z and RT we need to group the peaks into features. To do this we can run the PeakDensity algorithm.
+
+```{r}
+pdp <- PeakDensityParam(sampleGroups=(rd@phenoData@data$sample_group), binSize=0.05, minFraction = 0.5, bw = 20)
+res <- groupChromPeaks(res, param = pdp)
+```
+
+What you'll also notice is that each time we ask for a new algorithm we create an object for the parameters. This allows this object type to remember this call history that has happened to this 'XCMSMSnExp' object.
+
+
+
+```{r}
+head(chromPeaks(res)[order(chromPeaks(res)[,"maxo"], decreasing=T),])
+
+mzr<-c(166.05, 166.06)
+rtr<-c(2,2.5)*60 ## convert to seconds
+
+group_number<-length(unique(pd[,"sample_group"]))
+group_colors <- paste0(brewer.pal(group_number, "Set1")[1:group_number], "60")
+names(group_colors) <- unique(pd[,"sample_group"])
+chr_raw <- chromatogram(rd, mz = mzr, rt = rtr)
+plot(chr_raw, col = group_colors[chr_raw$sample_group])
+legend("topright", legend=names(group_colors),
+       col=group_colors, cex=1, pch=16)
+```
+
+Above you can see an EIC of the peak that we were looking for. This data has been generated directly from the raw data itself. 
+
+Although this data looks fairly well aligned we will still go ahead and align the data. Below it's worth playing with the parameters to see what effect they have on the alignment.
+
+```{r}
+bpis_adj_prior <- chromatogram(res, aggregationFun = "max") ## get the chromatograph prior to alignment
+
+obiwarp_parameters <- ObiwarpParam(binSize=0.1)
+res <- adjustRtime(res, param=obiwarp_parameters)
+cat("Below are the adjusted retention times per samples\n")
+head(adjustedRtime(res))
+
+plotAdjustedRtime(res, 
+                  col = group_colors[res$sample_group],
+                  peakGroupsCol = "grey", 
+                  peakGroupsPch = 1)
+                  
+bpis_adj <- chromatogram(res, aggregationFun = "max")
+par(mfrow = c(2, 1))
+plot(bpis_adj_prior, col = group_colors[bpis_adj_prior$sample_group])
+plot(bpis_adj, col = group_colors[bpis_adj$sample_group])
+
+
+# ## Plot also the difference of adjusted to raw retention time.
+# plotAdjustedRtime(res, col = group_colors[res$sample_group])
+
+```
+
+Above the images show the retention time drift. Between the two plots before and after there is probable not much difference. With other files this alignment can be much more pronounced.
+
+```{r}
+## Plot the raw data
+pdp <- PeakDensityParam(sampleGroups=(rd@phenoData@data$sample_group), binSize=0.05, minFraction = 0.5, bw = max(adjustedRtime(res)))
+res <- groupChromPeaks(res, param = pdp)
+
+chr_raw <- chromatogram(rd, mz = mzr, rt = rtr)
+plot(chr_raw, col = group_colors[chr_raw$sample_group])
+legend("topright", legend=names(group_colors),
+       col=group_colors, cex=1, pch=16)
+```
+Above we have only looked at one feature throughout this workflow however, this could be easyly changed via altering the mzr and rtr vectors. This could be easly automated in a simple for loop to print out the EICs fro all features.
+Lastly, we can now get the final data that we want and write it out to a file.
+
+```{r}
+res <- fillChromPeaks(res)
+dat<-cbind(featureDefinitions(res), featureValues(res, value = "into"))
+write.xlsx(dat, file="XCMS-dataoutput.xlsx")
+```
+
+
+However, quickly we can do a few plots to have a look at the data and look at doing some stats
+```{r}
+require(pcaMethods)
+require(ggplot2)
+
+uvScale<-function(vals){
+	temp.sd<-apply(vals, 1, sd, na.rm=T)
+	temp.uv<-vals/temp.sd
+	return(temp.uv)
+} ## a small function to do UV scaling on all the data
+
+logTrans<-function(vals){
+	vals.log<-log10(abs(vals+1.0E-16))
+} ## very small function to do log transformations
+
+val<-featureValues(res, value = "into")
+val[which(is.na(val))]<-0
+valDiff<-logTrans(uvScale( t(val) ))
+pca.results<-pcaMethods::pca(valDiff, nPcs=3, center=TRUE, scale="none")
+
+sc<-data.frame(pca.results@scores, class=rd@phenoData@data$sample_group)
+gg<- ggplot(sc, aes(PC1, PC2, colour=class)) +
+ 			    scale_size_area() + geom_point()
+print(gg)
+
+```
+
+
+

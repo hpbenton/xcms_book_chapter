@@ -13,16 +13,21 @@ mzDev <- 25
 
 xs<-xcmsSet(method="centWave", peakwidth=c(10,120))
 xs<-retcor(method="obiwarp", plottype="d", profstep=0.1)
-gxs<-group(xs, bw=20, mzwid=0.01)
-fill<-fillPeaks(gxs, nSlaves=4)
+gxs<-group(xs, bw=20, mzwid=0.05)
+fill<-fillPeaks(gxs)
+```
+
+```{r}
 
 rtrange<-cbind(rtmin=var[,"rt"]-rtDev, rtmax=var[,"rt"]+rtDev) 
 mzRange<-t(sapply(var[,"mz"], function(x, mzDev){
     range(xcms:::ppmDev(x, mzDev))
 }, mzDev))
 colnames(mzRange)<-c("mzmin", "mzmax")
-
 eics<-getEIC(fill, rtrange=rtrange, mzrange=mzRange)
+```
+
+```{r}
 dir.create("eic")
 
 colVec<-as.factor(fac)

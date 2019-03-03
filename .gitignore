@@ -4,4 +4,3 @@
 .Ruserdata
 .DS_Store
 Data/*/*.mzML
-*.html
